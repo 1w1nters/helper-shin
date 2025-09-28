@@ -1,11 +1,11 @@
-// server.js
+// --- START OF FILE server.js ---
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch'); // Для выполнения HTTP-запросов на серверной стороне
 require('dotenv').config(); // Для загрузки переменных окружения из .env
 
 const app = express();
-const port = process.env.PORT || 3000; // Render предоставит PORT
+const port = process.env.PORT || 3000; // Render предоставит PORT, для локальной разработки 3000
 
 // Включаем CORS для всех запросов
 app.use(cors());
@@ -13,31 +13,33 @@ app.use(cors());
 app.use(express.json());
 
 // Ваш Shinoa API токен из переменных окружения Render
-const SHINOA_AUTH_TOKEN = process.env.SHINOA_AUTH_TOKEN;
+// (Это должна быть строка TOKEN=...;XSRF=... из ваших куки)
+const SHINOA_AUTH_COOKIE = process.env.SHINOA_AUTH_COOKIE;
 const SHINOA_API_BASE_URL = 'https://logs.shinoa.tech/api/v1'; // Базовый URL Shinoa
 
 // Эндпоинт для проксирования запросов к Shinoa
 app.post('/api/shinoa-logs', async (req, res) => {
     // Получаем данные, переданные от расширения
-    const { nickname, logType, serverId } = req.body;
+    const { nickname, logType, serverId } = req.body; // serverId пока не используется Shinoa API, но передаем на всякий случай
 
-    if (!nickname || !SHINOA_AUTH_TOKEN) {
-        return res.status(400).json({ success: false, error: 'Missing nickname or Shinoa API token.' });
+    if (!nickname || !SHINOA_AUTH_COOKIE) {
+        return res.status(400).json({ success: false, error: 'Missing nickname or Shinoa authentication cookie.' });
     }
 
     try {
-        const targetUrl = `${SHINOA_API_BASE_URL}/punish`; // Предполагаем, что endpoint для наказаний - /punish
+        let targetPath = '/punish'; // По умолчанию ищем наказания
+        // Вам нужно будет уточнить у Shinoa, какой API использовать для других типов логов
+        // Например: if (logType === 'disconnects') targetPath = '/disconnects';
+
+        const targetUrl = `${SHINOA_API_BASE_URL}${targetPath}`;
 
         // Формируем тело запроса для Shinoa.
-        // ПОЖАЛУЙСТА, УТОЧНИТЕ ФОРМАТ ЗАПРОСА ДЛЯ SHINOA!
-        // На основе вашего скриншота, запрос был POST на /punish
-        // и в Request Payload видно "player": "Concentracia_Space".
-        // Возможно, также потребуется "type", "server" и т.д.
+        // На основе скриншота, Shinoa API для '/punish' принимает 'player'
         const shinoaRequestBody = {
             player: nickname,
-            // Добавьте другие параметры, если Shinoa API их требует,
-            // например: type: 'warn', server: serverId
-            // Вам нужно будет определить, как Shinoa фильтрует по типам логов.
+            // Добавьте другие параметры, если Shinoa API их требует
+            // Например: type: logType (если Shinoa использует поле 'type' в запросе)
+            // server: serverId (если Shinoa использует поле 'server' в запросе)
         };
 
         // Выполняем запрос к Shinoa API с нужными заголовками и телом
@@ -45,14 +47,10 @@ app.post('/api/shinoa-logs', async (req, res) => {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                // Для Shinoa, возможно, потребуется передавать 'TOKEN' как Cookie
-                // или 'Authorization' header, если у вас есть Bearer токен.
-                // Если это кука, то сложнее, так как fetch() в Node.js
-                // не управляет куками автоматически как браузер.
-                // В вашем случае, судя по скриншоту, TOKEN был в Cookie.
-                // Простейший вариант для прокси - это передать его как обычный заголовок,
-                // если Shinoa его примет.
-                'X-Shinoa-Auth-Token': SHINOA_AUTH_TOKEN // ПРИМЕР: передача токена через кастомный заголовок
+                // Передаем токен авторизации как Cookie.
+                // Это критически важный шаг, так как Shinoa ожидает этот заголовок.
+                // Строка SHINOA_AUTH_COOKIE должна быть в формате "TOKEN=ВАШ_ТОКЕН; XSRF=ВАШ_XSRF_ТОКЕН"
+                'Cookie': SHINOA_AUTH_COOKIE
             },
             body: JSON.stringify(shinoaRequestBody)
         });
@@ -61,6 +59,7 @@ app.post('/api/shinoa-logs', async (req, res) => {
         if (!shinoaResponse.ok) {
             const errorText = await shinoaResponse.text();
             console.error('Shinoa API error:', shinoaResponse.status, errorText);
+            // Пытаемся передать ошибку Shinoa обратно клиенту
             return res.status(shinoaResponse.status).json({ success: false, error: `Shinoa API returned ${shinoaResponse.status}: ${errorText}` });
         }
 
@@ -68,10 +67,16 @@ app.post('/api/shinoa-logs', async (req, res) => {
         res.json({ success: true, data: shinoaData }); // Возвращаем данные от Shinoa
     } catch (error) {
         console.error('Proxy error forwarding to Shinoa:', error);
-        res.status(500).json({ success: false, error: 'Internal proxy error' });
+        res.status(500).json({ success: false, error: `Internal proxy error: ${error.message}` });
     }
 });
 
-app.listen(port, () => {
-    console.log(`Proxy server listening on port ${port}`);
+// Простой эндпоинт для проверки работоспособности прокси
+app.get('/', (req, res) => {
+    res.send('Shinoa Proxy is running. Use POST /api/shinoa-logs to query.');
 });
+
+app.listen(port, () => {
+    console.log(`Shinoa Proxy server listening on port ${port}`);
+});
+// --- END OF FILE server.js ---
